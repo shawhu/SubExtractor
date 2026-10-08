@@ -6,9 +6,9 @@ namespace SubExtractor;
 
 public class MainForm : Form
 {
-    private const int keySeekIntervalMs = 100;
-    private const long keySeekStepMs = 5000;
-
+    private const int keySeekIntervalMs = 50;
+    // how far each jump goes forward/backward (ms), set from the video's keyframe interval on drop
+    private long keySeekStepMs = 1000;
     private readonly LibVLC libVlc;
     private readonly MediaPlayer mediaPlayer;
     private Label lblInfo = null!;
@@ -22,6 +22,46 @@ public class MainForm : Form
     private bool isDragging;
     private long lastKeySeekTick;
     private System.ComponentModel.IContainer? components;
+
+    private static async Task<long> ReadKeyframeIntervalMsAsync(string path)
+    {
+        const long fallbackMs = 5000;
+        const int keyframeCount = 4; // how many keyframes to sample
+        const int scanSeconds = 30; // how many seconds from the start of the file to scan
+        var startInfo = new System.Diagnostics.ProcessStartInfo("ffprobe")
+        {
+            RedirectStandardOutput = true,
+            CreateNoWindow = true
+        };
+        foreach (var arg in new[]
+                 {
+                 "-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey",
+                 "-show_entries", "frame=pts_time", "-of", "csv=p=0",
+                 "-read_intervals", $"%+{scanSeconds}", "-i", path
+             })
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(startInfo)!;
+            var output = await process.StandardOutput.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            var times = output
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(line => double.TryParse(line.TrimEnd(','), NumberStyles.Float, CultureInfo.InvariantCulture, out var t) ? t : -1)
+                .Where(t => t >= 0)
+                .Take(keyframeCount)
+                .ToList();
+            var intervalMs = times.Count < 2 ? 0 : (long)((times[^1] - times[0]) / (times.Count - 1) * 1000);
+            return intervalMs > 0 ? intervalMs : fallbackMs;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return fallbackMs;
+        }
+    }
 
     public MainForm()
     {
@@ -277,13 +317,14 @@ public class MainForm : Form
         {
             var metadata = await VideoMetadataReader.ReadAsync(files[0]);
             var fileInfo = new FileInfo(files[0]);
+            keySeekStepMs = await ReadKeyframeIntervalMsAsync(files[0]);
             lblInfo.Text = Path.GetFileName(files[0]) + Environment.NewLine + string.Join(
                 "    ",
                 $"Size: {FormatFileSize(fileInfo.Length)}",
                 $"Duration: {FormatDuration(metadata.Duration)}",
                 $"Resolution: {FormatResolution(metadata.Height)} ({metadata.Width} x {metadata.Height})",
-                $"FPS: {metadata.FrameRate.ToString("0.##", CultureInfo.InvariantCulture)}");
-
+                $"FPS: {metadata.FrameRate.ToString("0.##", CultureInfo.InvariantCulture)}",
+                $"Keyframe interval: {(keySeekStepMs / 1000.0).ToString("0.###", CultureInfo.InvariantCulture)}s");
             lblDropPrompt.Visible = false;
             trackPosition.Enabled = true;
             btnPlayStop.Enabled = true;
