@@ -9,6 +9,7 @@ internal sealed class VideoOverlayForm : Form
     private const int fillAlpha = 3;
     private const int grabDistance = 8;
     private const int minBoxSize = 10;
+    private const int dragMinStep = 20;
     private const int initialBoxWidth = 1200;
     private const int initialBoxHeight = 100;
     private const int initialBoxBottom = 20;
@@ -66,6 +67,11 @@ internal sealed class VideoOverlayForm : Form
     private Edges dragEdges;
     private bool isMoving;
     private int moveGrabOffsetY;
+    private int dragCenterX;
+    private int dragStartMouseX;
+    private int dragStartLeft;
+    private int dragStartRight;
+    private bool isSymmetricHorizontalDrag;
 
     public VideoOverlayForm()
     {
@@ -115,6 +121,34 @@ internal sealed class VideoOverlayForm : Form
 
         var pixels = ToPixels();
         dragEdges = HitTest(e.Location, pixels);
+        isSymmetricHorizontalDrag =
+            (ModifierKeys & Keys.Shift) == Keys.Shift &&
+            (dragEdges.HasFlag(Edges.Left) || dragEdges.HasFlag(Edges.Right));
+        if (dragEdges.HasFlag(Edges.Left) || dragEdges.HasFlag(Edges.Right))
+        {
+            if (isSymmetricHorizontalDrag)
+            {
+                dragCenterX = screenBounds.Width / 2;
+                var centeredLeft = dragCenterX - (pixels.Width / 2);
+                pixels = new Rectangle(centeredLeft, pixels.Top, pixels.Width, pixels.Height);
+                box = new RectangleF(
+                    (float)pixels.Left / screenBounds.Width,
+                    box.Y,
+                    (float)pixels.Width / screenBounds.Width,
+                    box.Height);
+                Render();
+                BoxChanged?.Invoke(this, EventArgs.Empty);
+            }
+            else
+            {
+                dragCenterX = pixels.Left + (pixels.Width / 2);
+            }
+
+            dragStartMouseX = e.X;
+            dragStartLeft = pixels.Left;
+            dragStartRight = pixels.Right;
+        }
+
         if (dragEdges == Edges.None && pixels.Contains(e.Location))
         {
             isMoving = true;
@@ -153,32 +187,37 @@ internal sealed class VideoOverlayForm : Form
         var top2 = pixels.Top;
         var right = pixels.Right;
         var bottom = pixels.Bottom;
-        var keepHorizontalSymmetry = (ModifierKeys & Keys.Shift) == Keys.Shift;
-        if (keepHorizontalSymmetry && dragEdges.HasFlag(Edges.Left))
+        if (dragEdges.HasFlag(Edges.Left))
         {
-            var centerTwice = screenBounds.Width;
-            var minLeft = Math.Max(0, centerTwice - screenBounds.Width);
-            var maxLeft = Math.Min(screenBounds.Width, (centerTwice - minBoxSize) / 2);
-            left = Math.Clamp(e.X, minLeft, maxLeft);
-            right = centerTwice - left;
-        }
-        else if (keepHorizontalSymmetry && dragEdges.HasFlag(Edges.Right))
-        {
-            var centerTwice = screenBounds.Width;
-            var minRight = Math.Max(
-                centerTwice - screenBounds.Width,
-                (centerTwice + minBoxSize + 1) / 2);
-            var maxRight = Math.Min(screenBounds.Width, centerTwice);
-            right = Math.Clamp(e.X, minRight, maxRight);
-            left = centerTwice - right;
-        }
-        else if (dragEdges.HasFlag(Edges.Left))
-        {
-            left = Math.Clamp(e.X, 0, right - minBoxSize);
+            var targetLeft = dragStartLeft + e.X - dragStartMouseX;
+            var minDistance = isSymmetricHorizontalDrag
+                ? (minBoxSize + 1) / 2
+                : Math.Max(0, dragCenterX - right + minBoxSize);
+            var maxDistance = isSymmetricHorizontalDrag
+                ? Math.Min(dragCenterX, screenBounds.Width - dragCenterX)
+                : dragCenterX;
+            var distance = SnapDistanceToDragStep(dragCenterX - targetLeft, minDistance, maxDistance);
+            left = dragCenterX - distance;
+            if (isSymmetricHorizontalDrag)
+            {
+                right = dragCenterX + distance;
+            }
         }
         else if (dragEdges.HasFlag(Edges.Right))
         {
-            right = Math.Clamp(e.X, left + minBoxSize, screenBounds.Width);
+            var targetRight = dragStartRight + e.X - dragStartMouseX;
+            var minDistance = isSymmetricHorizontalDrag
+                ? (minBoxSize + 1) / 2
+                : Math.Max(0, left + minBoxSize - dragCenterX);
+            var maxDistance = isSymmetricHorizontalDrag
+                ? Math.Min(dragCenterX, screenBounds.Width - dragCenterX)
+                : screenBounds.Width - dragCenterX;
+            var distance = SnapDistanceToDragStep(targetRight - dragCenterX, minDistance, maxDistance);
+            right = dragCenterX + distance;
+            if (isSymmetricHorizontalDrag)
+            {
+                left = dragCenterX - distance;
+            }
         }
 
         if (dragEdges.HasFlag(Edges.Top))
@@ -198,6 +237,24 @@ internal sealed class VideoOverlayForm : Form
             (float)(bottom - top2) / screenBounds.Height);
         Render();
         BoxChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static int SnapDistanceToDragStep(int distance, int minDistance, int maxDistance)
+    {
+        if (minDistance > maxDistance)
+        {
+            return maxDistance;
+        }
+
+        var minSteps = (minDistance + dragMinStep - 1) / dragMinStep;
+        var maxSteps = maxDistance / dragMinStep;
+        if (minSteps > maxSteps)
+        {
+            return Math.Clamp(distance, minDistance, maxDistance);
+        }
+
+        var steps = (int)Math.Round((double)distance / dragMinStep, MidpointRounding.AwayFromZero);
+        return Math.Clamp(steps, minSteps, maxSteps) * dragMinStep;
     }
 
     private Rectangle ToPixels()
