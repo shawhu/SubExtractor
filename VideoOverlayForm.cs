@@ -153,12 +153,30 @@ internal sealed class VideoOverlayForm : Form
         var top2 = pixels.Top;
         var right = pixels.Right;
         var bottom = pixels.Bottom;
-        if (dragEdges.HasFlag(Edges.Left))
+        var keepHorizontalSymmetry = (ModifierKeys & Keys.Shift) == Keys.Shift;
+        if (keepHorizontalSymmetry && dragEdges.HasFlag(Edges.Left))
+        {
+            var centerTwice = screenBounds.Width;
+            var minLeft = Math.Max(0, centerTwice - screenBounds.Width);
+            var maxLeft = Math.Min(screenBounds.Width, (centerTwice - minBoxSize) / 2);
+            left = Math.Clamp(e.X, minLeft, maxLeft);
+            right = centerTwice - left;
+        }
+        else if (keepHorizontalSymmetry && dragEdges.HasFlag(Edges.Right))
+        {
+            var centerTwice = screenBounds.Width;
+            var minRight = Math.Max(
+                centerTwice - screenBounds.Width,
+                (centerTwice + minBoxSize + 1) / 2);
+            var maxRight = Math.Min(screenBounds.Width, centerTwice);
+            right = Math.Clamp(e.X, minRight, maxRight);
+            left = centerTwice - right;
+        }
+        else if (dragEdges.HasFlag(Edges.Left))
         {
             left = Math.Clamp(e.X, 0, right - minBoxSize);
         }
-
-        if (dragEdges.HasFlag(Edges.Right))
+        else if (dragEdges.HasFlag(Edges.Right))
         {
             right = Math.Clamp(e.X, left + minBoxSize, screenBounds.Width);
         }
