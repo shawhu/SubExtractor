@@ -11,6 +11,7 @@ public class MainForm : Form
     private long keySeekStepMs = 1000;
     private readonly LibVLC libVlc;
     private readonly MediaPlayer mediaPlayer;
+    private readonly VideoOverlayForm overlay;
     private Label lblInfo = null!;
     private Panel pnlDropZone = null!;
     private Label lblDropPrompt = null!;
@@ -72,19 +73,18 @@ public class MainForm : Form
         InitializeComponent();
         videoView.MediaPlayer = mediaPlayer;
 
+        overlay = new VideoOverlayForm { Owner = this };
+        overlay.DragEnter += DropZone_DragEnter;
+        overlay.DragDrop += DropZone_DragDrop;
+
         var settings = AppSettings.Load();
         ClientSize = new Size(settings.ClientSize.Width, settings.ClientSize.Height);
         StartPosition = FormStartPosition.Manual;
         Location = new Point(settings.ClientStartPosition.X, settings.ClientStartPosition.Y);
         lblInfo.TextChanged += (_, _) => LayoutTopControls();
         Resize += (_, _) => LayoutTopControls();
+        Move += (_, _) => SyncOverlay();
 
-        pnlDropZone.AllowDrop = true;
-        lblDropPrompt.AllowDrop = true;
-        pnlDropZone.DragEnter += DropZone_DragEnter;
-        lblDropPrompt.DragEnter += DropZone_DragEnter;
-        pnlDropZone.DragDrop += DropZone_DragDrop;
-        lblDropPrompt.DragDrop += DropZone_DragDrop;
         LayoutTopControls();
     }
 
@@ -99,6 +99,12 @@ public class MainForm : Form
         }
 
         base.Dispose(disposing);
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        SyncOverlay();
     }
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -237,6 +243,21 @@ public class MainForm : Form
             trackPosition.Height);
         btnPlayStop.Location = new Point(left, trackPosition.Bottom + dropZoneMargin);
         btnPause.Location = new Point(btnPlayStop.Right + dropZoneMargin, btnPlayStop.Top);
+        SyncOverlay();
+    }
+
+    private void SyncOverlay()
+    {
+        if (!Visible)
+        {
+            return;
+        }
+
+        overlay.Visible = pnlDropZone.Visible;
+        if (overlay.Visible)
+        {
+            overlay.SyncTo(videoView.RectangleToScreen(videoView.ClientRectangle));
+        }
     }
 
     private void PnlDropZone_Paint(object? sender, PaintEventArgs e)
