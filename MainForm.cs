@@ -12,6 +12,9 @@ public class MainForm : Form
     private readonly LibVLC libVlc;
     private readonly MediaPlayer mediaPlayer;
     private readonly VideoOverlayForm overlay;
+    private string infoText = "hello\nworld";
+    private int sourceVideoWidth;
+    private int sourceVideoHeight;
     private Label lblInfo = null!;
     private Panel pnlDropZone = null!;
     private Label lblDropPrompt = null!;
@@ -24,11 +27,28 @@ public class MainForm : Form
     private long lastKeySeekTick;
     private System.ComponentModel.IContainer? components;
 
+    private void UpdateInfoText()
+    {
+        var boxLine = string.Empty;
+        if (sourceVideoWidth > 0 && sourceVideoHeight > 0)
+        {
+            var box = overlay.Box;
+            var x = (int)Math.Round(box.X * sourceVideoWidth);
+            var y = (int)Math.Round(box.Y * sourceVideoHeight);
+            var w = (int)Math.Round(box.Width * sourceVideoWidth);
+            var h = (int)Math.Round(box.Height * sourceVideoHeight);
+            boxLine = $"Box: [ {x},  {y},  {w},  {h} ]";
+        }
+
+        lblInfo.Text = infoText + Environment.NewLine + boxLine;
+    }
+
     private static async Task<long> ReadKeyframeIntervalMsAsync(string path)
     {
         const long fallbackMs = 5000;
-        const int keyframeCount = 4; // how many keyframes to sample
-        const int scanSeconds = 30; // how many seconds from the start of the file to scan
+        const int keyframeCount = 20; // how many keyframes to sample
+        const int scanStartSeconds = 30 * 60; // skip the first 30 minutes
+        const int scanSeconds = 140; // how many seconds to scan after the start position
         var startInfo = new System.Diagnostics.ProcessStartInfo("ffprobe")
         {
             RedirectStandardOutput = true,
@@ -38,7 +58,7 @@ public class MainForm : Form
                  {
                  "-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey",
                  "-show_entries", "frame=pts_time", "-of", "csv=p=0",
-                 "-read_intervals", $"%+{scanSeconds}", "-i", path
+                 "-read_intervals", $"{scanStartSeconds}%+{scanSeconds}", "-i", path
              })
         {
             startInfo.ArgumentList.Add(arg);
@@ -55,7 +75,9 @@ public class MainForm : Form
                 .Where(t => t >= 0)
                 .Take(keyframeCount)
                 .ToList();
-            var intervalMs = times.Count < 2 ? 0 : (long)((times[^1] - times[0]) / (times.Count - 1) * 1000);
+            var intervalMs = times.Count < 2
+                ? 0
+                : (long)Math.Ceiling((times[^1] - times[0]) / (times.Count - 1)) * 1000;
             return intervalMs > 0 ? intervalMs : fallbackMs;
         }
         catch (System.ComponentModel.Win32Exception)
@@ -76,6 +98,8 @@ public class MainForm : Form
         overlay = new VideoOverlayForm { Owner = this };
         overlay.DragEnter += DropZone_DragEnter;
         overlay.DragDrop += DropZone_DragDrop;
+        overlay.BoxChanged += (_, _) => UpdateInfoText();
+
 
         var settings = AppSettings.Load();
         ClientSize = new Size(settings.ClientSize.Width, settings.ClientSize.Height);
@@ -118,7 +142,11 @@ public class MainForm : Form
         if (active && Environment.TickCount64 - lastKeySeekTick >= keySeekIntervalMs)
         {
             lastKeySeekTick = Environment.TickCount64;
-            var step = keyData == Keys.Right ? keySeekStepMs : -keySeekStepMs;
+
+            const long testMarginMs = 1500; // try 0, 500, 1000, 2000
+            var step = keyData == Keys.Right ? keySeekStepMs + testMarginMs : -keySeekStepMs;
+
+
             mediaPlayer.Time = Math.Clamp(mediaPlayer.Time + step, 0, mediaPlayer.Length);
             if (mediaPlayer.State == VLCState.Paused)
             {
@@ -184,13 +212,13 @@ public class MainForm : Form
         trackPosition.MouseUp += TrackPosition_MouseUp;
         btnPlayStop.Enabled = false;
         btnPlayStop.Name = "btnPlayStop";
-        btnPlayStop.Size = new Size(90, 30);
+        btnPlayStop.Size = new Size(90, 60);
         btnPlayStop.TabIndex = 3;
         btnPlayStop.Text = "Play";
         btnPlayStop.Click += BtnPlayStop_Click;
         btnPause.Enabled = false;
         btnPause.Name = "btnPause";
-        btnPause.Size = new Size(90, 30);
+        btnPause.Size = new Size(90, 60);
         btnPause.TabIndex = 4;
         btnPause.Text = "Pause";
         btnPause.Click += BtnPause_Click;
@@ -222,7 +250,7 @@ public class MainForm : Form
             lblInfo.Font,
             Size.Empty,
             TextFormatFlags.NoPadding).Height;
-        lblInfo.Height = (lineHeight * 2) + lblInfo.Padding.Vertical;
+        lblInfo.Height = (lineHeight * 3) + lblInfo.Padding.Vertical;
 
         var controlsHeight = trackPosition.Height + btnPlayStop.Height + (dropZoneMargin * 2);
         var dropZoneTop = lblInfo.Bottom + dropZoneMargin;
@@ -339,13 +367,16 @@ public class MainForm : Form
             var metadata = await VideoMetadataReader.ReadAsync(files[0]);
             var fileInfo = new FileInfo(files[0]);
             keySeekStepMs = await ReadKeyframeIntervalMsAsync(files[0]);
-            lblInfo.Text = Path.GetFileName(files[0]) + Environment.NewLine + string.Join(
+            infoText = Path.GetFileName(files[0]) + Environment.NewLine + string.Join(
                 "    ",
                 $"Size: {FormatFileSize(fileInfo.Length)}",
                 $"Duration: {FormatDuration(metadata.Duration)}",
                 $"Resolution: {FormatResolution(metadata.Height)} ({metadata.Width} x {metadata.Height})",
                 $"FPS: {metadata.FrameRate.ToString("0.##", CultureInfo.InvariantCulture)}",
                 $"Keyframe interval: {(keySeekStepMs / 1000.0).ToString("0.###", CultureInfo.InvariantCulture)}s");
+            sourceVideoWidth = metadata.Width;
+            sourceVideoHeight = metadata.Height;
+            UpdateInfoText();
             lblDropPrompt.Visible = false;
             trackPosition.Enabled = true;
             btnPlayStop.Enabled = true;
