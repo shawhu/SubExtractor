@@ -234,9 +234,9 @@ public partial class MainForm : Form
             keySeekStepMs = await KeyframeIntervalReader.ReadAsync(files[0]);
             infoText = Path.GetFileName(files[0]) + Environment.NewLine + string.Join(
                 "    ",
-                $"Size: {FormatFileSize(fileInfo.Length)}",
-                $"Duration: {FormatDuration(metadata.Duration)}",
-                $"Resolution: {FormatResolution(metadata.Height)} ({metadata.Width} x {metadata.Height})",
+                $"Size: {Common.FormatFileSize(fileInfo.Length)}",
+                $"Duration: {Common.FormatDuration(metadata.Duration)}",
+                $"Resolution: {Common.FormatResolution(metadata.Height)} ({metadata.Width} x {metadata.Height})",
                 $"FPS: {metadata.FrameRate.ToString("0.##", CultureInfo.InvariantCulture)}",
                 $"Keyframe interval: {(keySeekStepMs / 1000.0).ToString("0.###", CultureInfo.InvariantCulture)}s");
             sourceVideoWidth = metadata.Width;
@@ -276,32 +276,4 @@ public partial class MainForm : Form
         }
     }
 
-    private static string FormatFileSize(long bytes)
-    {
-        const double bytesPerMegabyte = 1024 * 1024;
-        const double bytesPerGigabyte = 1024 * bytesPerMegabyte;
-
-        if (bytes > bytesPerGigabyte)
-        {
-            return $"{bytes / bytesPerGigabyte:0.###} GB";
-        }
-
-        return $"{Math.Max(1, bytes / bytesPerMegabyte):0.##} MB";
-    }
-
-    private static string FormatDuration(TimeSpan duration)
-    {
-        var hours = (int)duration.TotalHours;
-        return $"{hours:00}:{duration.Minutes:00}:{duration.Seconds:00}";
-    }
-
-    private static string FormatResolution(int height)
-    {
-        return height switch
-        {
-            >= 4320 => "8K",
-            >= 2160 => "4K",
-            _ => $"{height}p"
-        };
-    }
 }
