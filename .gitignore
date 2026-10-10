@@ -5,6 +5,10 @@
 [Rr]elease/
 [Aa]rtifacts/
 
+# Nvidia stuff
+nvidia_dlls/
+
+
 # Visual Studio
 .vs/
 *.suo

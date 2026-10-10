@@ -217,6 +217,41 @@ public partial class MainForm : Form
         return true;
     }
 
+    private void SetOverlayFromFrameCrop(Rectangle crop)
+    {
+        var viewSize = overlay.ViewSize;
+        var videoAspectRatio = (double)sourceVideoWidth / sourceVideoHeight;
+        var viewAspectRatio = (double)viewSize.Width / viewSize.Height;
+        double videoLeft;
+        double videoTop;
+        double videoWidth;
+        double videoHeight;
+        if (videoAspectRatio <= viewAspectRatio)
+        {
+            videoHeight = viewSize.Height;
+            videoWidth = videoHeight * videoAspectRatio;
+            videoLeft = (viewSize.Width - videoWidth) / 2;
+            videoTop = 0;
+        }
+        else
+        {
+            videoWidth = viewSize.Width;
+            videoHeight = videoWidth / videoAspectRatio;
+            videoLeft = 0;
+            videoTop = (viewSize.Height - videoHeight) / 2;
+        }
+
+        var left = videoLeft + (double)crop.Left * videoWidth / sourceVideoWidth;
+        var top = videoTop + (double)crop.Top * videoHeight / sourceVideoHeight;
+        var width = (double)crop.Width * videoWidth / sourceVideoWidth;
+        var height = (double)crop.Height * videoHeight / sourceVideoHeight;
+        overlay.SetBox(new RectangleF(
+            (float)(left / viewSize.Width),
+            (float)(top / viewSize.Height),
+            (float)(width / viewSize.Width),
+            (float)(height / viewSize.Height)));
+    }
+
     private void SyncOverlay()
     {
         if (!Visible)
@@ -384,7 +419,7 @@ public partial class MainForm : Form
 
         isExtractingFrames = true;
         btnCalibrateRedBox.Enabled = false;
-        extractionProgress = $"0/{frameCount}";
+        extractionProgress = $"Extracting 0/{frameCount}";
         UpdateInfoText();
         UseWaitCursor = true;
 
@@ -397,24 +432,77 @@ public partial class MainForm : Form
 
             Directory.CreateDirectory(outputDirectory);
             await ExtractFramesAsync(videoPath, outputDirectory, frameCount, crop);
+            var frameFiles = Directory.GetFiles(outputDirectory, "frame_*.jpg");
+            extractionProgress = $"Detecting text 0/{frameFiles.Length}";
+            UpdateInfoText();
+            var progress = new Progress<int>(scannedFrames =>
+            {
+                extractionProgress = $"Detecting text {scannedFrames}/{frameFiles.Length}";
+                UpdateInfoText();
+            });
+            var scanResult = await Task.Run(() => SubtitleBoundsScanner.Scan(outputDirectory, progress));
             extractionProgress = null;
+            UpdateInfoText();
+
+            if (!string.Equals(currentVideoPath, videoPath, StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(
+                    this,
+                    "The loaded video changed while calibration was running. The detected box was not applied.",
+                    "Calibration result discarded",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (scanResult.RegionsDetected == 0)
+            {
+                MessageBox.Show(
+                    this,
+                    $"Scanned {scanResult.FramesScanned} frames, but no text regions were detected. The red box was not changed.",
+                    "No subtitles detected",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            var calibratedCrop = new Rectangle(
+                crop.X + scanResult.Bounds.X,
+                crop.Y + scanResult.Bounds.Y,
+                scanResult.Bounds.Width,
+                scanResult.Bounds.Height);
+            Common.WriteDiagnostic(
+                $"Red-box calibration: rough video crop {{{crop.X},{crop.Y},{crop.Width},{crop.Height}}}; detected video crop {{{calibratedCrop.X},{calibratedCrop.Y},{calibratedCrop.Width},{calibratedCrop.Height}}}");
+            SetOverlayFromFrameCrop(calibratedCrop);
             UpdateInfoText();
             MessageBox.Show(
                 this,
-                $"Frame extraction completed. Images are in:{Environment.NewLine}{outputDirectory}",
-                "Extraction complete",
+                $"Scanned {scanResult.FramesScanned} frames and detected {scanResult.RegionsDetected} text regions. The red box now encloses all detected regions.{Environment.NewLine}{Environment.NewLine}Extracted images are in:{Environment.NewLine}{outputDirectory}",
+                "Red box calibrated",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
         }
         catch (Exception ex) when (ex is InvalidOperationException
                                    or InvalidDataException
                                    or IOException
-                                   or UnauthorizedAccessException)
+                                   or UnauthorizedAccessException
+                                   or ArgumentException
+                                   or OpenCvSharp.OpenCVException
+                                   or DllNotFoundException
+                                   or BadImageFormatException
+                                   or EntryPointNotFoundException
+                                   or TypeInitializationException
+                                   or System.ComponentModel.Win32Exception
+                                   || ex.GetType() == typeof(Exception))
         {
+            Common.WriteDiagnostic($"Red-box calibration failed: {ex}");
+            var errorMessage = ex.Message.Contains("cudnn64_9.dll", StringComparison.OrdinalIgnoreCase)
+                ? "PaddleSharp GPU detection could not load cuDNN (cudnn64_9.dll, Windows error 126). The DLL or one of its dependencies is missing or could not be loaded. This PaddleSharp GPU package does not include CUDA/cuDNN; provide the matching CUDA 12.9 and cuDNN 9.10 runtime DLLs with the application. Full PaddleSharp details are in Debug Output."
+                : ex.Message;
             MessageBox.Show(
                 this,
-                ex.Message,
-                "Frame extraction failed",
+                errorMessage,
+                "Red box calibration failed",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
@@ -473,6 +561,8 @@ public partial class MainForm : Form
         }
 
         var errorTask = process.StandardError.ReadToEndAsync();
+        var lastProgressUpdate = System.Diagnostics.Stopwatch.StartNew();
+        long extractedFrames = 0;
         while (await process.StandardOutput.ReadLineAsync() is { } line)
         {
             if (line.StartsWith("frame=", StringComparison.Ordinal) &&
@@ -480,10 +570,13 @@ public partial class MainForm : Form
                     line.AsSpan("frame=".Length).Trim(),
                     NumberStyles.Integer,
                     CultureInfo.InvariantCulture,
-                    out var extractedFrames))
+                    out extractedFrames) &&
+                (extractedFrames >= totalFrames ||
+                 lastProgressUpdate.Elapsed >= TimeSpan.FromMilliseconds(500)))
             {
                 extractionProgress = $"{Math.Min(extractedFrames, totalFrames)}/{totalFrames}";
                 UpdateInfoText();
+                lastProgressUpdate.Restart();
             }
         }
 
@@ -493,6 +586,12 @@ public partial class MainForm : Form
         {
             throw new InvalidDataException(
                 string.IsNullOrWhiteSpace(error) ? "ffmpeg could not extract frames." : error.Trim());
+        }
+
+        if (extractedFrames > 0)
+        {
+            extractionProgress = $"{Math.Min(extractedFrames, totalFrames)}/{totalFrames}";
+            UpdateInfoText();
         }
     }
 

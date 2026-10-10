@@ -90,7 +90,7 @@ public partial class MainForm
         btnCalibrateRedBox.Name = "btnCalibrateRedBox";
         btnCalibrateRedBox.Size = ButtonSize;
         btnCalibrateRedBox.TabIndex = 5;
-        btnCalibrateRedBox.Text = "Extract Frames";
+        btnCalibrateRedBox.Text = "Calibrate Red Box";
         btnCalibrateRedBox.Click += BtnCalibrateRedBox_Click;
         playbackTimer.Interval = 100;
         playbackTimer.Enabled = true;

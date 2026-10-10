@@ -2,6 +2,12 @@ namespace SubExtractor;
 
 internal static class Common
 {
+    internal static void WriteDiagnostic(string message)
+    {
+        Console.WriteLine(message);
+        System.Diagnostics.Debug.WriteLine(message);
+    }
+
     internal static string FormatFileSize(long bytes)
     {
         const double bytesPerMegabyte = 1024 * 1024;

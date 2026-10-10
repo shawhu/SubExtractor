@@ -113,6 +113,27 @@ internal sealed class VideoOverlayForm : Form
         Render();
     }
 
+    public void SetBox(RectangleF bounds)
+    {
+        if (screenBounds.Width <= 0 || screenBounds.Height <= 0)
+        {
+            throw new InvalidOperationException("The video overlay has no visible area.");
+        }
+
+        var minimumWidth = Math.Min(1f, (float)minBoxSize / screenBounds.Width);
+        var minimumHeight = Math.Min(1f, (float)minBoxSize / screenBounds.Height);
+        var width = Math.Clamp(bounds.Width, minimumWidth, 1f);
+        var height = Math.Clamp(bounds.Height, minimumHeight, 1f);
+        var left = Math.Clamp(bounds.Left, 0f, 1f - width);
+        var top = Math.Clamp(bounds.Top, 0f, 1f - height);
+        box = new RectangleF(left, top, width, height);
+        var pixelBounds = ToPixels();
+        Common.WriteDiagnostic(
+            $"Overlay red box set: normalized {{{box.X:F4},{box.Y:F4},{box.Width:F4},{box.Height:F4}}}, pixels {{{pixelBounds.X},{pixelBounds.Y},{pixelBounds.Width},{pixelBounds.Height}}} of {screenBounds.Width}x{screenBounds.Height}");
+        Render();
+        BoxChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
