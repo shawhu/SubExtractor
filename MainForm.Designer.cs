@@ -16,6 +16,7 @@ public partial class MainForm
     private TrackBar trackPosition = null!;
     private Button btnPlayStop = null!;
     private Button btnPause = null!;
+    private Button btnCalibrateRedBox = null!;
     private System.Windows.Forms.Timer playbackTimer = null!;
     private Size ButtonSize = new Size(90, 60);
 
@@ -29,6 +30,7 @@ public partial class MainForm
         trackPosition = new TrackBar();
         btnPlayStop = new Button();
         btnPause = new Button();
+        btnCalibrateRedBox = new Button();
         playbackTimer = new System.Windows.Forms.Timer(components);
         SuspendLayout();
         pnlDropZone.SuspendLayout();
@@ -84,6 +86,12 @@ public partial class MainForm
         btnPause.TabIndex = 4;
         btnPause.Text = "Pause";
         btnPause.Click += BtnPause_Click;
+        btnCalibrateRedBox.Enabled = false;
+        btnCalibrateRedBox.Name = "btnCalibrateRedBox";
+        btnCalibrateRedBox.Size = ButtonSize;
+        btnCalibrateRedBox.TabIndex = 5;
+        btnCalibrateRedBox.Text = "Extract Frames";
+        btnCalibrateRedBox.Click += BtnCalibrateRedBox_Click;
         playbackTimer.Interval = 100;
         playbackTimer.Enabled = true;
         playbackTimer.Tick += PlaybackTimer_Tick;
@@ -96,6 +104,7 @@ public partial class MainForm
         Controls.Add(trackPosition);
         Controls.Add(btnPlayStop);
         Controls.Add(btnPause);
+        Controls.Add(btnCalibrateRedBox);
         AutoScaleMode = AutoScaleMode.Font;
         Text = "MainForm";
         ResumeLayout(false);

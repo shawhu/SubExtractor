@@ -84,6 +84,8 @@ internal sealed class VideoOverlayForm : Form
     // x, y, width, height as fractions (0 to 1) of the overlay's width and height
     public RectangleF Box => box;
 
+    public Size ViewSize => screenBounds.Size;
+
     public event EventHandler? BoxChanged;
 
     protected override bool ShowWithoutActivation => true;

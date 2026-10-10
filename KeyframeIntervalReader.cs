@@ -1,5 +1,3 @@
-using System.Globalization;
-
 namespace SubExtractor;
 
 internal static class KeyframeIntervalReader
@@ -8,8 +6,10 @@ internal static class KeyframeIntervalReader
     {
         const long fallbackMs = 5000;
         const int keyframeCount = 20; // how many keyframes to sample
-        const int scanStartSeconds = 30 * 60; // skip the first 30 minutes
-        const int scanSeconds = 140; // how many seconds to scan after the start position
+        var durationSeconds = await ReadDurationAsync(path);
+        var scanSeconds = durationSeconds < 140 ? durationSeconds * 8 / 10 : 140; // how many seconds to scan, centered in the video
+
+        var scanStartSeconds = (durationSeconds - scanSeconds) / 2;
         var startInfo = new System.Diagnostics.ProcessStartInfo("ffprobe")
         {
             RedirectStandardOutput = true,
@@ -32,18 +32,46 @@ internal static class KeyframeIntervalReader
             await process.WaitForExitAsync();
             var times = output
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(line => double.TryParse(line.TrimEnd(','), NumberStyles.Float, CultureInfo.InvariantCulture, out var t) ? t : -1)
+                .Select(line => int.TryParse(line.Split('.')[0].TrimEnd(','), out var t) ? t : -1)
                 .Where(t => t >= 0)
                 .Take(keyframeCount)
                 .ToList();
             var intervalMs = times.Count < 2
                 ? 0
-                : (long)Math.Ceiling((times[^1] - times[0]) / (times.Count - 1)) * 1000;
+                : (long)Math.Ceiling((double)(times[^1] - times[0]) / (times.Count - 1)) * 1000;
             return intervalMs > 0 ? intervalMs : fallbackMs;
         }
         catch (System.ComponentModel.Win32Exception)
         {
             return fallbackMs;
+        }
+    }
+
+    private static async Task<int> ReadDurationAsync(string path)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo("ffprobe")
+        {
+            RedirectStandardOutput = true,
+            CreateNoWindow = true
+        };
+        foreach (var arg in new[]
+                 {
+                 "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", "-i", path
+             })
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(startInfo)!;
+            var output = await process.StandardOutput.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            return int.TryParse(output.Trim().Split('.')[0], out var d) ? d : 0;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return 0;
         }
     }
 }

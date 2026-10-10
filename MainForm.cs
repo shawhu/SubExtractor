@@ -15,6 +15,10 @@ public partial class MainForm : Form
     private string infoText = "hello\nworld";
     private int sourceVideoWidth;
     private int sourceVideoHeight;
+    private string? currentVideoPath;
+    private TimeSpan currentVideoDuration;
+    private string? extractionProgress;
+    private bool isExtractingFrames;
     private bool isDragging;
     private long lastKeySeekTick;
 
@@ -23,12 +27,17 @@ public partial class MainForm : Form
         var boxLine = string.Empty;
         if (sourceVideoWidth > 0 && sourceVideoHeight > 0)
         {
-            var box = overlay.Box;
-            var x = (int)Math.Round(box.X * sourceVideoWidth);
-            var y = (int)Math.Round(box.Y * sourceVideoHeight);
-            var w = (int)Math.Round(box.Width * sourceVideoWidth);
-            var h = (int)Math.Round(box.Height * sourceVideoHeight);
-            boxLine = $"Box: [ {x},  {y},  {w},  {h} ]";
+            if (TryGetFrameCrop(out var crop))
+            {
+                boxLine = $"Box: [ {crop.X},  {crop.Y},  {crop.Width},  {crop.Height} ]";
+            }
+        }
+
+        if (!string.IsNullOrEmpty(extractionProgress))
+        {
+            boxLine = string.IsNullOrEmpty(boxLine)
+                ? extractionProgress
+                : $"{boxLine}    {extractionProgress}";
         }
 
         lblInfo.Text = infoText + Environment.NewLine + boxLine;
@@ -90,8 +99,11 @@ public partial class MainForm : Form
         if (active && Environment.TickCount64 - lastKeySeekTick >= keySeekIntervalMs)
         {
             lastKeySeekTick = Environment.TickCount64;
+            Console.WriteLine($"keySeekStepMs:{keySeekStepMs}");
 
-            const long testMarginMs = 1500; // try 0, 500, 1000, 2000
+            var testMarginMs = keySeekStepMs / 10;
+            //var testMarginMs = 0;
+            Console.WriteLine($"testMarginMs:{testMarginMs}");
             var step = keyData == Keys.Right ? keySeekStepMs + testMarginMs : -keySeekStepMs;
 
 
@@ -136,7 +148,73 @@ public partial class MainForm : Form
             trackPosition.Height);
         btnPlayStop.Location = new Point(left, trackPosition.Bottom + dropZoneMargin);
         btnPause.Location = new Point(btnPlayStop.Right + dropZoneMargin, btnPlayStop.Top);
+        btnCalibrateRedBox.Location = new Point(btnPause.Right + dropZoneMargin, btnPause.Top);
         SyncOverlay();
+    }
+
+    private bool TryGetFrameCrop(out Rectangle crop)
+    {
+        crop = Rectangle.Empty;
+        var viewSize = overlay.ViewSize;
+        if (viewSize.Width <= 0 || viewSize.Height <= 0 ||
+            sourceVideoWidth <= 0 || sourceVideoHeight <= 0)
+        {
+            return false;
+        }
+
+        var videoAspectRatio = (double)sourceVideoWidth / sourceVideoHeight;
+        var viewAspectRatio = (double)viewSize.Width / viewSize.Height;
+        double videoLeft;
+        double videoTop;
+        double videoWidth;
+        double videoHeight;
+        if (videoAspectRatio <= viewAspectRatio)
+        {
+            videoHeight = viewSize.Height;
+            videoWidth = videoHeight * videoAspectRatio;
+            videoLeft = (viewSize.Width - videoWidth) / 2;
+            videoTop = 0;
+        }
+        else
+        {
+            videoWidth = viewSize.Width;
+            videoHeight = videoWidth / videoAspectRatio;
+            videoLeft = 0;
+            videoTop = (viewSize.Height - videoHeight) / 2;
+        }
+
+        var box = overlay.Box;
+        var boxLeft = Math.Clamp((double)box.Left * viewSize.Width, 0, viewSize.Width);
+        var boxTop = Math.Clamp((double)box.Top * viewSize.Height, 0, viewSize.Height);
+        var boxRight = Math.Clamp((double)box.Right * viewSize.Width, 0, viewSize.Width);
+        var boxBottom = Math.Clamp((double)box.Bottom * viewSize.Height, 0, viewSize.Height);
+        var left = Math.Max(boxLeft, videoLeft);
+        var top = Math.Max(boxTop, videoTop);
+        var right = Math.Min(boxRight, videoLeft + videoWidth);
+        var bottom = Math.Min(boxBottom, videoTop + videoHeight);
+        if (right <= left || bottom <= top)
+        {
+            return false;
+        }
+
+        var frameLeft = Math.Clamp(
+            (int)Math.Floor((left - videoLeft) * sourceVideoWidth / videoWidth),
+            0,
+            sourceVideoWidth - 1);
+        var frameTop = Math.Clamp(
+            (int)Math.Floor((top - videoTop) * sourceVideoHeight / videoHeight),
+            0,
+            sourceVideoHeight - 1);
+        var frameRight = Math.Clamp(
+            (int)Math.Ceiling((right - videoLeft) * sourceVideoWidth / videoWidth),
+            frameLeft + 1,
+            sourceVideoWidth);
+        var frameBottom = Math.Clamp(
+            (int)Math.Ceiling((bottom - videoTop) * sourceVideoHeight / videoHeight),
+            frameTop + 1,
+            sourceVideoHeight);
+        crop = Rectangle.FromLTRB(frameLeft, frameTop, frameRight, frameBottom);
+        return true;
     }
 
     private void SyncOverlay()
@@ -241,10 +319,13 @@ public partial class MainForm : Form
                 $"Keyframe interval: {(keySeekStepMs / 1000.0).ToString("0.###", CultureInfo.InvariantCulture)}s");
             sourceVideoWidth = metadata.Width;
             sourceVideoHeight = metadata.Height;
+            currentVideoPath = files[0];
+            currentVideoDuration = metadata.Duration;
             UpdateInfoText();
             lblDropPrompt.Visible = false;
             trackPosition.Enabled = true;
             btnPlayStop.Enabled = true;
+            btnCalibrateRedBox.Enabled = !isExtractingFrames;
             using var media = new Media(libVlc, files[0], FromType.FromPath);
 
             void PauseOnFirstPlay(object? s, EventArgs a)
@@ -273,6 +354,145 @@ public partial class MainForm : Form
         finally
         {
             UseWaitCursor = false;
+        }
+
+    }
+
+    private async void BtnCalibrateRedBox_Click(object? sender, EventArgs e)
+    {
+        if (currentVideoPath is null || isExtractingFrames)
+        {
+            return;
+        }
+
+        var videoPath = currentVideoPath;
+        if (!TryGetFrameCrop(out var crop))
+        {
+            MessageBox.Show(
+                this,
+                "The red box does not overlap the visible video image.",
+                "Nothing to extract",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        var frameCount = Math.Max(1, (long)Math.Ceiling(currentVideoDuration.TotalSeconds));
+        var outputDirectory = Path.Combine(
+            Path.GetDirectoryName(videoPath)!,
+            Path.GetFileNameWithoutExtension(videoPath) + "_frames");
+
+        isExtractingFrames = true;
+        btnCalibrateRedBox.Enabled = false;
+        extractionProgress = $"0/{frameCount}";
+        UpdateInfoText();
+        UseWaitCursor = true;
+
+        try
+        {
+            if (Directory.Exists(outputDirectory))
+            {
+                Directory.Delete(outputDirectory, recursive: true);
+            }
+
+            Directory.CreateDirectory(outputDirectory);
+            await ExtractFramesAsync(videoPath, outputDirectory, frameCount, crop);
+            extractionProgress = null;
+            UpdateInfoText();
+            MessageBox.Show(
+                this,
+                $"Frame extraction completed. Images are in:{Environment.NewLine}{outputDirectory}",
+                "Extraction complete",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException
+                                   or InvalidDataException
+                                   or IOException
+                                   or UnauthorizedAccessException)
+        {
+            MessageBox.Show(
+                this,
+                ex.Message,
+                "Frame extraction failed",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+        finally
+        {
+            isExtractingFrames = false;
+            extractionProgress = null;
+            UpdateInfoText();
+            btnCalibrateRedBox.Enabled = currentVideoPath is not null;
+            UseWaitCursor = false;
+        }
+    }
+
+    private async Task ExtractFramesAsync(
+        string videoPath,
+        string outputDirectory,
+        long totalFrames,
+        Rectangle crop)
+    {
+        using var process = new System.Diagnostics.Process
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "ffmpeg",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            }
+        };
+        foreach (var argument in new[]
+                 {
+                     "-hide_banner", "-loglevel", "error", "-nostats",
+                     "-i", videoPath, "-map", "0:v:0",
+                     "-vf", $"crop={crop.Width}:{crop.Height}:{crop.X}:{crop.Y},fps=1",
+                     "-q:v", "2",
+                     "-start_number", "1", "-progress", "pipe:1", "-f", "image2",
+                     Path.Combine(outputDirectory, "frame_%06d.jpg")
+                 })
+        {
+            process.StartInfo.ArgumentList.Add(argument);
+        }
+
+        try
+        {
+            if (!process.Start())
+            {
+                throw new InvalidOperationException("Could not start ffmpeg.");
+            }
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            throw new InvalidOperationException(
+                "Could not start ffmpeg. Install FFmpeg and make sure ffmpeg is available on PATH.",
+                ex);
+        }
+
+        var errorTask = process.StandardError.ReadToEndAsync();
+        while (await process.StandardOutput.ReadLineAsync() is { } line)
+        {
+            if (line.StartsWith("frame=", StringComparison.Ordinal) &&
+                long.TryParse(
+                    line.AsSpan("frame=".Length).Trim(),
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var extractedFrames))
+            {
+                extractionProgress = $"{Math.Min(extractedFrames, totalFrames)}/{totalFrames}";
+                UpdateInfoText();
+            }
+        }
+
+        await process.WaitForExitAsync();
+        var error = await errorTask;
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidDataException(
+                string.IsNullOrWhiteSpace(error) ? "ffmpeg could not extract frames." : error.Trim());
         }
     }
 
