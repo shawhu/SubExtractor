@@ -91,9 +91,7 @@ public partial class MainForm : Form
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
         if (keyData is not (Keys.Left or Keys.Right))
-        {
             return base.ProcessCmdKey(ref msg, keyData);
-        }
 
         var active = mediaPlayer.IsPlaying || mediaPlayer.State == VLCState.Paused;
         if (active && Environment.TickCount64 - lastKeySeekTick >= keySeekIntervalMs)
@@ -109,9 +107,7 @@ public partial class MainForm : Form
 
             mediaPlayer.Time = Math.Clamp(mediaPlayer.Time + step, 0, mediaPlayer.Length);
             if (mediaPlayer.State == VLCState.Paused)
-            {
                 mediaPlayer.NextFrame();
-            }
         }
 
         return true;
@@ -193,9 +189,7 @@ public partial class MainForm : Form
         var right = Math.Min(boxRight, videoLeft + videoWidth);
         var bottom = Math.Min(boxBottom, videoTop + videoHeight);
         if (right <= left || bottom <= top)
-        {
             return false;
-        }
 
         var frameLeft = Math.Clamp(
             (int)Math.Floor((left - videoLeft) * sourceVideoWidth / videoWidth),
@@ -255,15 +249,11 @@ public partial class MainForm : Form
     private void SyncOverlay()
     {
         if (!Visible)
-        {
             return;
-        }
 
         overlay.Visible = pnlDropZone.Visible;
         if (overlay.Visible)
-        {
             overlay.SyncTo(videoView.RectangleToScreen(videoView.ClientRectangle));
-        }
     }
 
     private void PnlDropZone_Paint(object? sender, PaintEventArgs e)
@@ -280,9 +270,7 @@ public partial class MainForm : Form
         btnPause.Enabled = active;
 
         if (!isDragging)
-        {
             trackPosition.Value = active ? (int)(mediaPlayer.Position * 1000) : 0;
-        }
     }
 
     private void TrackPosition_MouseUp(object? sender, MouseEventArgs e)
@@ -290,21 +278,15 @@ public partial class MainForm : Form
         isDragging = false;
         mediaPlayer.Position = trackPosition.Value / 1000f;
         if (mediaPlayer.State == VLCState.Paused)
-        {
             mediaPlayer.NextFrame();
-        }
     }
 
     private void BtnPlayStop_Click(object? sender, EventArgs e)
     {
         if (mediaPlayer.IsPlaying || mediaPlayer.State == VLCState.Paused)
-        {
             mediaPlayer.Stop();
-        }
         else
-        {
             mediaPlayer.Play();
-        }
     }
 
     private void BtnPause_Click(object? sender, EventArgs e)
@@ -320,9 +302,7 @@ public partial class MainForm : Form
             e.Effect = DragDropEffects.Copy;
         }
         else
-        {
             e.Effect = DragDropEffects.None;
-        }
     }
 
     private async void DropZone_DragDrop(object? sender, DragEventArgs e)
@@ -395,10 +375,9 @@ public partial class MainForm : Form
 
     private async void BtnCalibrateRedBox_Click(object? sender, EventArgs e)
     {
+        int extractionIntervalInSecond = 1;
         if (currentVideoPath is null || isExtractingFrames)
-        {
             return;
-        }
 
         var videoPath = currentVideoPath;
         if (!TryGetFrameCrop(out var crop))
@@ -411,8 +390,18 @@ public partial class MainForm : Form
                 MessageBoxIcon.Warning);
             return;
         }
+        // for debug only don't delete section
+        // crop.X = (1920 - 1080) / 2;
+        // crop.Y = 0;
+        // crop.Width = 1080;
+        // crop.Height = crop.Width;
+        // Common.WriteDiagnostic(
+        //     $"shawhu Debug crop: {{X={crop.X}, Y={crop.Y}, Width={crop.Width}, Height={crop.Height}}}");
+        // end of debug section
 
-        var frameCount = Math.Max(1, (long)Math.Ceiling(currentVideoDuration.TotalSeconds));
+        var frameCount = Math.Max(
+            1L,
+            (long)Math.Ceiling(currentVideoDuration.TotalSeconds / extractionIntervalInSecond));
         var outputDirectory = Path.Combine(
             Path.GetDirectoryName(videoPath)!,
             Path.GetFileNameWithoutExtension(videoPath) + "_frames");
@@ -426,12 +415,18 @@ public partial class MainForm : Form
         try
         {
             if (Directory.Exists(outputDirectory))
-            {
                 Directory.Delete(outputDirectory, recursive: true);
-            }
 
             Directory.CreateDirectory(outputDirectory);
-            await ExtractFramesAsync(videoPath, outputDirectory, frameCount, crop);
+            // try to extract cropped frame image to jpg files
+            await ExtractFramesAsync(
+                videoPath,
+                outputDirectory,
+                frameCount,
+                crop,
+                extractionIntervalInSecond);
+
+            // try to scan the extracted
             var frameFiles = Directory.GetFiles(outputDirectory, "frame_*.jpg");
             extractionProgress = $"Detecting text 0/{frameFiles.Length}";
             UpdateInfoText();
@@ -520,7 +515,8 @@ public partial class MainForm : Form
         string videoPath,
         string outputDirectory,
         long totalFrames,
-        Rectangle crop)
+        Rectangle crop,
+        int extractionIntervalInSecond)
     {
         using var process = new System.Diagnostics.Process
         {
@@ -537,7 +533,7 @@ public partial class MainForm : Form
                  {
                      "-hide_banner", "-loglevel", "error", "-nostats",
                      "-i", videoPath, "-map", "0:v:0",
-                     "-vf", $"crop={crop.Width}:{crop.Height}:{crop.X}:{crop.Y},fps=1",
+                     "-vf", $"crop={crop.Width}:{crop.Height}:{crop.X}:{crop.Y},fps=1/{extractionIntervalInSecond}",
                      "-q:v", "2",
                      "-start_number", "1", "-progress", "pipe:1", "-f", "image2",
                      Path.Combine(outputDirectory, "frame_%06d.jpg")
@@ -549,9 +545,7 @@ public partial class MainForm : Form
         try
         {
             if (!process.Start())
-            {
                 throw new InvalidOperationException("Could not start ffmpeg.");
-            }
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
@@ -574,7 +568,7 @@ public partial class MainForm : Form
                 (extractedFrames >= totalFrames ||
                  lastProgressUpdate.Elapsed >= TimeSpan.FromMilliseconds(500)))
             {
-                extractionProgress = $"{Math.Min(extractedFrames, totalFrames)}/{totalFrames}";
+                extractionProgress = $"{Math.Min(extractedFrames, totalFrames)}/{totalFrames} ({(int)(Math.Min(extractedFrames, totalFrames) * 100.0 / totalFrames)}%)";
                 UpdateInfoText();
                 lastProgressUpdate.Restart();
             }
@@ -583,14 +577,12 @@ public partial class MainForm : Form
         await process.WaitForExitAsync();
         var error = await errorTask;
         if (process.ExitCode != 0)
-        {
             throw new InvalidDataException(
-                string.IsNullOrWhiteSpace(error) ? "ffmpeg could not extract frames." : error.Trim());
-        }
+            string.IsNullOrWhiteSpace(error) ? "ffmpeg could not extract frames." : error.Trim());
 
         if (extractedFrames > 0)
         {
-            extractionProgress = $"{Math.Min(extractedFrames, totalFrames)}/{totalFrames}";
+            extractionProgress = $"{Math.Min(extractedFrames, totalFrames)}/{totalFrames} ({(int)(Math.Min(extractedFrames, totalFrames) * 100.0 / totalFrames)}%)";
             UpdateInfoText();
         }
     }

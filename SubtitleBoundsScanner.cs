@@ -12,6 +12,8 @@ internal readonly record struct SubtitleBoundsScanResult(
 
 internal static class SubtitleBoundsScanner
 {
+    private const int Gap = 32;
+
     public static SubtitleBoundsScanResult Scan(
         string framesDirectory,
         IProgress<int>? progress = null)
@@ -21,90 +23,91 @@ internal static class SubtitleBoundsScanner
             .Order(StringComparer.Ordinal)
             .ToArray();
         if (framePaths.Length == 0)
-        {
             throw new InvalidDataException("No extracted JPG frames were found to scan.");
+
+        int frameWidth, frameHeight;
+        using (var first = Cv2.ImRead(framePaths[0], ImreadModes.Color))
+        {
+            if (first.Empty())
+                throw new InvalidDataException($"Could not read extracted frame: {framePaths[0]}");
+            frameWidth = first.Width;
+            frameHeight = first.Height;
         }
+
+        var cellWidth = frameWidth + Gap;
+        var cellHeight = frameHeight + Gap;
+        var columns = Math.Max(1, (int)Math.Round(Math.Sqrt((double)cellHeight / cellWidth)));
+        var rows = Math.Max(1, (int)Math.Round((double)columns * cellWidth / cellHeight));
+        var batchSize = columns * rows;
 
         var left = int.MaxValue;
         var top = int.MaxValue;
         var right = int.MinValue;
         var bottom = int.MinValue;
         var regionsDetected = 0;
-        var imageWidth = 0;
-        var imageHeight = 0;
-        var lastProgressUpdate = System.Diagnostics.Stopwatch.StartNew();
         Common.WriteDiagnostic(
-            "PaddleOCR backend: CUDA GPU 0 (RTX 30-series runtime), detection-only ChineseV5 model (shared by PaddleSharp's Chinese and English V5 model definitions)");
+            $"PaddleOCR backend: CUDA GPU 0 (RTX 30-series runtime), detection-only ChineseV5 model; stitching {batchSize} frame(s) per call ({columns}x{rows} grid)");
         using var detector = new PaddleOcrDetector(
             LocalDetectionModel.ChineseV5,
             PaddleDevice.Gpu(deviceId: 0));
+        Common.WriteDiagnostic($"shawhu Detector MaxSize = {detector.MaxSize}");
+        using var canvas = new Mat(rows * cellHeight, columns * cellWidth, MatType.CV_8UC3);
 
-        for (var i = 0; i < framePaths.Length; i++)
+        for (var start = 0; start < framePaths.Length; start += batchSize)
         {
-            using var image = Cv2.ImRead(framePaths[i], ImreadModes.Color);
-            if (image.Empty())
+            var count = Math.Min(batchSize, framePaths.Length - start);
+            canvas.SetTo(Scalar.Black);
+            for (var slot = 0; slot < count; slot++)
             {
-                throw new InvalidDataException($"Could not read extracted frame: {framePaths[i]}");
-            }
+                using var image = Cv2.ImRead(framePaths[start + slot], ImreadModes.Color);
+                if (image.Empty() || image.Width != frameWidth || image.Height != frameHeight)
+                    throw new InvalidDataException(
+                        $"Frame is unreadable or differs in size from the first frame: {framePaths[start + slot]}");
 
-            imageWidth = image.Width;
-            imageHeight = image.Height;
+                using var target = canvas[new Rect(
+                    slot % columns * cellWidth,
+                    slot / columns * cellHeight,
+                    frameWidth,
+                    frameHeight)];
+                image.CopyTo(target);
+            }
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var detectedRegions = detector.Run(image);
-            Common.WriteDiagnostic($"detect {sw.ElapsedMilliseconds} ms");
+            var detectedRegions = detector.Run(canvas);
+            Common.WriteDiagnostic($"detect {count} frame(s) in {sw.ElapsedMilliseconds} ms");
 
-
-            for (var regionIndex = 0; regionIndex < detectedRegions.Length; regionIndex++)
+            foreach (var region in detectedRegions)
             {
-                var regionLeft = float.PositiveInfinity;
-                var regionTop = float.PositiveInfinity;
-                var regionRight = float.NegativeInfinity;
-                var regionBottom = float.NegativeInfinity;
-                foreach (var point in detectedRegions[regionIndex].Points())
+                var originX = (int)(region.Center.X / cellWidth) * cellWidth;
+                var originY = (int)(region.Center.Y / cellHeight) * cellHeight;
+                foreach (var point in region.Points())
                 {
-                    regionLeft = Math.Min(regionLeft, point.X);
-                    regionTop = Math.Min(regionTop, point.Y);
-                    regionRight = Math.Max(regionRight, point.X);
-                    regionBottom = Math.Max(regionBottom, point.Y);
-                    left = Math.Min(left, (int)Math.Floor(point.X));
-                    top = Math.Min(top, (int)Math.Floor(point.Y));
-                    right = Math.Max(right, (int)Math.Ceiling(point.X));
-                    bottom = Math.Max(bottom, (int)Math.Ceiling(point.Y));
+                    var x = Math.Clamp(point.X - originX, 0, frameWidth);
+                    var y = Math.Clamp(point.Y - originY, 0, frameHeight);
+                    left = Math.Min(left, (int)Math.Floor(x));
+                    top = Math.Min(top, (int)Math.Floor(y));
+                    right = Math.Max(right, (int)Math.Ceiling(x));
+                    bottom = Math.Max(bottom, (int)Math.Ceiling(y));
                 }
 
-                var regionX = (int)Math.Floor(regionLeft);
-                var regionY = (int)Math.Floor(regionTop);
-                var regionWidth = (int)Math.Ceiling(regionRight) - regionX;
-                var regionHeight = (int)Math.Ceiling(regionBottom) - regionY;
-                // Common.WriteDiagnostic(
-                //     $"  detected box {regionIndex + 1}: {{{regionX},{regionY},{regionWidth},{regionHeight}}}");
-                // regionsDetected++;
+                regionsDetected++;
             }
 
-            if (progress is not null &&
-                (i == framePaths.Length - 1 ||
-                 lastProgressUpdate.Elapsed >= TimeSpan.FromMilliseconds(500)))
-            {
-                progress.Report(i + 1);
-                lastProgressUpdate.Restart();
-            }
+            progress?.Report(start + count);
         }
 
         Rectangle bounds;
         if (regionsDetected == 0)
-        {
             bounds = Rectangle.Empty;
-        }
         else
         {
-            var boundedLeft = Math.Clamp(left, 0, imageWidth - 1);
-            var boundedTop = Math.Clamp(top, 0, imageHeight - 1);
+            var boundedLeft = Math.Clamp(left, 0, frameWidth - 1);
+            var boundedTop = Math.Clamp(top, 0, frameHeight - 1);
             bounds = Rectangle.FromLTRB(
                 boundedLeft,
                 boundedTop,
-                Math.Clamp(Math.Max(left + 1, right), boundedLeft + 1, imageWidth),
-                Math.Clamp(Math.Max(top + 1, bottom), boundedTop + 1, imageHeight));
+                Math.Clamp(Math.Max(left + 1, right), boundedLeft + 1, frameWidth),
+                Math.Clamp(Math.Max(top + 1, bottom), boundedTop + 1, frameHeight));
         }
 
         Common.WriteDiagnostic(

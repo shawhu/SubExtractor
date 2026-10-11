@@ -35,9 +35,7 @@ internal static class VideoMetadataReader
         try
         {
             if (!process.Start())
-            {
                 throw new InvalidOperationException("Could not start ffprobe.");
-            }
         }
         catch (Win32Exception ex)
         {
@@ -56,9 +54,7 @@ internal static class VideoMetadataReader
         catch (OperationCanceledException)
         {
             if (!process.HasExited)
-            {
                 process.Kill(entireProcessTree: true);
-            }
 
             await process.WaitForExitAsync();
             throw new TimeoutException("ffprobe did not finish reading the video within 30 seconds.");
@@ -67,10 +63,8 @@ internal static class VideoMetadataReader
         var output = await outputTask;
         var error = await errorTask;
         if (process.ExitCode != 0)
-        {
             throw new InvalidDataException(
-                string.IsNullOrWhiteSpace(error) ? "ffprobe could not read this video file." : error.Trim());
-        }
+            string.IsNullOrWhiteSpace(error) ? "ffprobe could not read this video file." : error.Trim());
 
         using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
@@ -87,9 +81,7 @@ internal static class VideoMetadataReader
             ?? GetNumber(stream, "duration")
             ?? throw new InvalidDataException("Could not determine the video duration.");
         if (durationSeconds <= 0 || durationSeconds > TimeSpan.MaxValue.TotalSeconds)
-        {
             throw new InvalidDataException("The video duration is invalid.");
-        }
 
         var frameRate = GetFrameRate(stream, "avg_frame_rate")
             ?? GetFrameRate(stream, "r_frame_rate")
@@ -113,9 +105,7 @@ internal static class VideoMetadataReader
     private static double? GetNumber(JsonElement element, string objectName, string propertyName)
     {
         if (!element.TryGetProperty(objectName, out var nested))
-        {
             return null;
-        }
 
         return GetNumber(nested, propertyName);
     }
@@ -123,9 +113,7 @@ internal static class VideoMetadataReader
     private static double? GetNumber(JsonElement element, string propertyName)
     {
         if (!element.TryGetProperty(propertyName, out var property))
-        {
             return null;
-        }
 
         var text = property.ValueKind switch
         {

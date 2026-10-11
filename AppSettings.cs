@@ -15,9 +15,7 @@ internal sealed class AppSettings
             ?? throw new InvalidDataException("appsettings.json must contain a JSON object.");
 
         if (settings.ClientSize.Width <= 0 || settings.ClientSize.Height <= 0)
-        {
             throw new InvalidDataException("ClientSize Width and Height must be positive values.");
-        }
 
         return settings;
     }

@@ -116,9 +116,7 @@ internal sealed class VideoOverlayForm : Form
     public void SetBox(RectangleF bounds)
     {
         if (screenBounds.Width <= 0 || screenBounds.Height <= 0)
-        {
             throw new InvalidOperationException("The video overlay has no visible area.");
-        }
 
         var minimumWidth = Math.Min(1f, (float)minBoxSize / screenBounds.Width);
         var minimumHeight = Math.Min(1f, (float)minBoxSize / screenBounds.Height);
@@ -138,9 +136,7 @@ internal sealed class VideoOverlayForm : Form
     {
         base.OnMouseDown(e);
         if (e.Button != MouseButtons.Left)
-        {
             return;
-        }
 
         var pixels = ToPixels();
         dragEdges = HitTest(e.Location, pixels);
@@ -163,9 +159,7 @@ internal sealed class VideoOverlayForm : Form
                 BoxChanged?.Invoke(this, EventArgs.Empty);
             }
             else
-            {
                 dragCenterX = pixels.Left + (pixels.Width / 2);
-            }
 
             dragStartMouseX = e.X;
             dragStartLeft = pixels.Left;
@@ -222,9 +216,7 @@ internal sealed class VideoOverlayForm : Form
             var distance = SnapDistanceToDragStep(dragCenterX - targetLeft, minDistance, maxDistance);
             left = dragCenterX - distance;
             if (isSymmetricHorizontalDrag)
-            {
                 right = dragCenterX + distance;
-            }
         }
         else if (dragEdges.HasFlag(Edges.Right))
         {
@@ -238,20 +230,14 @@ internal sealed class VideoOverlayForm : Form
             var distance = SnapDistanceToDragStep(targetRight - dragCenterX, minDistance, maxDistance);
             right = dragCenterX + distance;
             if (isSymmetricHorizontalDrag)
-            {
                 left = dragCenterX - distance;
-            }
         }
 
         if (dragEdges.HasFlag(Edges.Top))
-        {
             top2 = Math.Clamp(e.Y, 0, bottom - minBoxSize);
-        }
 
         if (dragEdges.HasFlag(Edges.Bottom))
-        {
             bottom = Math.Clamp(e.Y, top2 + minBoxSize, screenBounds.Height);
-        }
 
         box = new RectangleF(
             (float)left / screenBounds.Width,
@@ -265,16 +251,12 @@ internal sealed class VideoOverlayForm : Form
     private static int SnapDistanceToDragStep(int distance, int minDistance, int maxDistance)
     {
         if (minDistance > maxDistance)
-        {
             return maxDistance;
-        }
 
         var minSteps = (minDistance + dragMinStep - 1) / dragMinStep;
         var maxSteps = maxDistance / dragMinStep;
         if (minSteps > maxSteps)
-        {
             return Math.Clamp(distance, minDistance, maxDistance);
-        }
 
         var steps = (int)Math.Round((double)distance / dragMinStep, MidpointRounding.AwayFromZero);
         return Math.Clamp(steps, minSteps, maxSteps) * dragMinStep;
@@ -295,22 +277,14 @@ internal sealed class VideoOverlayForm : Form
         var withinX = point.X >= pixels.Left - grabDistance && point.X <= pixels.Right + grabDistance;
         var withinY = point.Y >= pixels.Top - grabDistance && point.Y <= pixels.Bottom + grabDistance;
         if (withinY && Math.Abs(point.X - pixels.Left) <= grabDistance)
-        {
             edges |= Edges.Left;
-        }
         else if (withinY && Math.Abs(point.X - pixels.Right) <= grabDistance)
-        {
             edges |= Edges.Right;
-        }
 
         if (withinX && Math.Abs(point.Y - pixels.Top) <= grabDistance)
-        {
             edges |= Edges.Top;
-        }
         else if (withinX && Math.Abs(point.Y - pixels.Bottom) <= grabDistance)
-        {
             edges |= Edges.Bottom;
-        }
 
         return edges;
     }
